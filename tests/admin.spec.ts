@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './testSetup';
 import { expectView, makeFranchise, openAdminDashboard, rowWith, startAs } from './index';
 
 test.describe('admin dashboard', () => {

@@ -214,6 +214,8 @@ async function handle(route: Route, b: Backend) {
       return respond({ user: b.currentUser, token: `token-${found.id}` });
     }
     if (method === "POST") {
+      if (allUsers(b).some((u) => u.email === body.email))
+        return respond({ message: "user already exists" }, 409);
       const created: MockUser = {
         id: String(b.nextId++),
         name: body.name,
@@ -276,7 +278,8 @@ async function handle(route: Route, b: Backend) {
     }
 
     if (method === "DELETE") {
-      if (!hasRole(b, "admin")) return respond({ message: "unauthorized" }, 403);
+      if (!hasRole(b, "admin"))
+        return respond({ message: "unauthorized" }, 403);
       if (!target) return respond({ message: "unknown user" }, 404);
       b.deletedIds.push(id);
       return respond({ message: "user deleted" });
@@ -388,6 +391,22 @@ async function handle(route: Route, b: Backend) {
       (s) => s.id !== storeDeleteMatch[2],
     );
     return respond({ message: "store deleted" });
+  }
+
+  if (path === "/api/docs" && method === "GET") {
+    return respond({
+      endpoints: [
+        {
+          requiresAuth: true,
+          method: "GET",
+          path: "/api/user/me",
+          description: "Get the authenticated user",
+          example:
+            "curl localhost:3000/api/user/me -H 'Authorization: Bearer tttttt'",
+          response: { id: 1, name: "常用名字", roles: [{ role: "admin" }] },
+        },
+      ],
+    });
   }
 
   return respond({ message: "unknown endpoint" }, 404);

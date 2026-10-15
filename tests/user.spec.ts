@@ -1,4 +1,4 @@
-import { test, expect } from "playwright-test-coverage";
+import { test, expect } from "./testSetup";
 import { expectLoggedIn, logout, startAs, submitLogin } from "./auth";
 import { users } from "./mockApi";
 import { clickNav } from "./navigation";
