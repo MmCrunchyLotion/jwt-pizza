@@ -98,6 +98,17 @@ export function makeFranchise(n: number): MockFranchise {
   };
 }
 
+// Builds a diner with a predictable name and email, useful for user list pagination tests.
+export function makeUser(n: number): MockUser {
+  return {
+    id: String(500 + n),
+    name: `user${n}`,
+    email: `u${n}@jwt.com`,
+    password: "x",
+    roles: [{ role: "diner" }],
+  };
+}
+
 export type MockOrder = {
   id: string;
   franchiseId: string;
@@ -113,10 +124,17 @@ export type BackendOptions = {
   failOrders?: boolean;
 };
 
+type UserEdit = Partial<Pick<MockUser, "name" | "email" | "password">>;
+
 // In-memory stand-in for the jwt-pizza-service. Tests can read and change it directly.
 export type Backend = {
   currentUser: Omit<MockUser, "password"> | null;
+  // Users created through the register form, plus any a test pushes in directly.
   registered: MockUser[];
+  // Changes made through PUT /api/user/:id, kept here so the shared `users` constant is never mutated.
+  edits: Record<string, UserEdit>;
+  // Ids removed through DELETE /api/user/:id.
+  deletedIds: string[];
   franchises: MockFranchise[];
   orders: MockOrder[];
   failOrders: boolean;
@@ -127,6 +145,13 @@ export type Backend = {
 export function publicUser(user: MockUser) {
   const { password, ...rest } = user;
   return rest;
+}
+
+// Every user that currently exists: the built-in three plus registered ones, minus deleted, with edits applied.
+function allUsers(backend: Backend): MockUser[] {
+  return [...Object.values(users), ...backend.registered]
+    .filter((u) => !backend.deletedIds.includes(u.id))
+    .map((u) => ({ ...u, ...backend.edits[u.id] }));
 }
 
 function hasRole(backend: Backend, role: string) {
@@ -145,7 +170,17 @@ function readBody(route: Route): any {
   }
 }
 
-// Mirrors the permission rules in the real franchiseRouter, so the UI tests see the same 401/403 behavior.
+// Turns the service's "*" wildcard filter (like "*pie*") into a case-insensitive matcher.
+function nameMatcher(filterParam: string | null) {
+  const filter = (filterParam ?? "*")
+    .split("*")
+    .map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+    .join(".*");
+  const regex = new RegExp(`^${filter}$`, "i");
+  return (name: string) => regex.test(name);
+}
+
+// Mirrors the permission rules in the real routers, so the UI tests see the same 401/403 behavior.
 async function handle(route: Route, b: Backend) {
   const request = route.request();
   const url = new URL(request.url());
@@ -171,7 +206,7 @@ async function handle(route: Route, b: Backend) {
 
   if (path === "/api/auth") {
     if (method === "PUT") {
-      const found = [...Object.values(users), ...b.registered].find(
+      const found = allUsers(b).find(
         (u) => u.email === body.email && u.password === body.password,
       );
       if (!found) return respond({ message: "unknown user" }, 404);
@@ -202,6 +237,52 @@ async function handle(route: Route, b: Backend) {
       : respond({ message: "unauthorized" }, 401);
   }
 
+  // List users: admin only, paginated, filtered by name.
+  if (path === "/api/user" && method === "GET") {
+    if (!b.currentUser) return respond({ message: "unauthorized" }, 401);
+    if (!hasRole(b, "admin")) return respond({ message: "unauthorized" }, 403);
+    const page = Number(url.searchParams.get("page") ?? 0);
+    const limit = Number(url.searchParams.get("limit") ?? 10);
+    const matches = nameMatcher(url.searchParams.get("name"));
+    const matching = allUsers(b).filter((u) => matches(u.name));
+    return respond({
+      users: matching
+        .slice(page * limit, page * limit + limit)
+        .map((u) => publicUser(u)),
+      more: matching.length > page * limit + limit,
+    });
+  }
+
+  // Update or delete a user.
+  const userMatch = path.match(/^\/api\/user\/(\d+)$/);
+  if (userMatch) {
+    const id = userMatch[1];
+    if (!b.currentUser) return respond({ message: "unauthorized" }, 401);
+    const target = allUsers(b).find((u) => u.id === id);
+
+    if (method === "PUT") {
+      if (b.currentUser.id !== id && !hasRole(b, "admin"))
+        return respond({ message: "unauthorized" }, 403);
+      if (!target) return respond({ message: "unknown user" }, 404);
+      b.edits[id] = {
+        ...b.edits[id],
+        name: body.name || target.name,
+        email: body.email || target.email,
+        ...(body.password ? { password: body.password } : {}),
+      };
+      const updated = allUsers(b).find((u) => u.id === id)!;
+      if (b.currentUser.id === id) b.currentUser = publicUser(updated);
+      return respond({ user: publicUser(updated), token: `token-${id}` });
+    }
+
+    if (method === "DELETE") {
+      if (!hasRole(b, "admin")) return respond({ message: "unauthorized" }, 403);
+      if (!target) return respond({ message: "unknown user" }, 404);
+      b.deletedIds.push(id);
+      return respond({ message: "user deleted" });
+    }
+  }
+
   if (path === "/api/order/menu") return respond(menu);
 
   if (path === "/api/order") {
@@ -225,13 +306,8 @@ async function handle(route: Route, b: Backend) {
     if (method === "GET") {
       const page = Number(url.searchParams.get("page") ?? 0);
       const limit = Number(url.searchParams.get("limit") ?? 10);
-      const filter = (url.searchParams.get("name") ?? "*")
-        .split("*")
-        .map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
-        .join(".*");
-      const matching = b.franchises.filter((f) =>
-        new RegExp(`^${filter}$`, "i").test(f.name),
-      );
+      const matches = nameMatcher(url.searchParams.get("name"));
+      const matching = b.franchises.filter((f) => matches(f.name));
       const franchises = matching.slice(page * limit, page * limit + limit);
       return respond({
         franchises,
@@ -244,9 +320,7 @@ async function handle(route: Route, b: Backend) {
         return respond({ message: "unable to create a franchise" }, 403);
       const admins = [];
       for (const admin of body.admins ?? []) {
-        const found = [...Object.values(users), ...b.registered].find(
-          (u) => u.email === admin.email,
-        );
+        const found = allUsers(b).find((u) => u.email === admin.email);
         if (!found)
           return respond(
             {
@@ -327,6 +401,8 @@ export async function mockBackend(
   const backend: Backend = {
     currentUser: null,
     registered: [],
+    edits: {},
+    deletedIds: [],
     franchises: options.franchises ?? defaultFranchises(),
     orders: options.orders ?? [],
     failOrders: options.failOrders ?? false,
@@ -334,8 +410,5 @@ export async function mockBackend(
     requests: [],
   };
   await page.route("**/api/**", (route) => handle(route, backend));
-  await page.route(/\/api\/user\?/, async (route) => {
-    await route.fulfill({ json: { users: [], more: false } });
-  });
   return backend;
 }
