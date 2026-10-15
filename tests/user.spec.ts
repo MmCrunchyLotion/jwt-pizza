@@ -32,5 +32,4 @@ test("updateUser", async ({ page }) => {
   await page.getByRole("link", { name: "pd" }).click();
 
   await expect(page.getByRole("main")).toContainText("pizza dinerx");
-  v;
 });
