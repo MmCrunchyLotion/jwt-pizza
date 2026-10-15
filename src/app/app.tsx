@@ -14,6 +14,7 @@ import FranchiseDashboard from "../views/franchiseDashboard";
 import History from "../views/history";
 import AdminDashboard from "../views/adminDashboard";
 import DinerDashboard from "../views/dinerDashboard";
+import DeleteUser from "../views/deleteUser";
 import CreateStore from "../views/createStore";
 import CreateFranchise from "../views/createFranchise";
 import CloseFranchise from "../views/closeFranchise";
@@ -90,6 +91,12 @@ export default function App() {
       component: <AdminDashboard user={user} />,
       constraints: [isAdmin],
       display: ["nav"],
+    },
+    {
+      title: "Delete user",
+      to: "/:subPath?/delete-user",
+      component: <DeleteUser />,
+      display: [],
     },
     {
       title: "Create franchise",
